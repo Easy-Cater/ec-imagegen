@@ -44,16 +44,7 @@ class LocalStorage(StorageBackend):
                 source_path = self._base_dir / source_path
 
         source_path = source_path.resolve()
-
-        legacy_storage_root = (self._base_dir.parent / "scripts" / "storage").resolve()
-        if not source_path.exists():
-            try:
-                relative_path = source_path.relative_to(legacy_storage_root)
-            except ValueError:
-                relative_path = None
-            if relative_path is not None:
-                source_path = (self._base_dir / relative_path).resolve()
-
+        
         try:
             return source_path.read_bytes()
         except FileNotFoundError as exc:

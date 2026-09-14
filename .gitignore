@@ -31,3 +31,5 @@ Thumbs.db
 
 # Redis dump files
 dump.rdb
+
+scripts/

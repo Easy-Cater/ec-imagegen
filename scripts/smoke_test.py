@@ -48,11 +48,9 @@ def main():
     fake_photo = b"\xff\xd8\xff\xe0" + b"NOTAREALPHOTO" * 20
     jobs = job_service.create_restyle_batch(
         db,
-        restaurant_id="rest_1",
-        menu_item_id="item_42",
         extra_styling="rustic wooden table",
         photo_bytes=fake_photo,
-        photo_filename="paneer_tikka.jpg",
+        photo_ext="jpg",
     )
     batch_id = jobs[0].batch_id
     print(f"   -> {len(jobs)} restyle jobs created, batch_id={batch_id}")

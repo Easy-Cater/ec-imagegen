@@ -61,13 +61,7 @@ class Settings(BaseSettings):
     REQUEST_TIMEOUT_SECONDS: int = 60
     MAX_RETRIES: int = 3
     RETRY_BACKOFF_SECONDS: float = 2.0
-
-        # --- Inference provider (image-to-image restyle only) ---
-    REPLICATE_API_TOKEN: str = ""
-    RESTYLE_MODEL: str = "black-forest-labs/flux-kontext-pro"
-    RESTYLE_PRICE_PER_IMAGE_USD: float = 0.04
-    RESTYLE_POLL_TIMEOUT_SECONDS: int = 180
-
+    
     # Format Replicate returns the restyled output in, and the extension it's
     # saved with. Not tied to the input format — every job outputs this same
     # format regardless of what the merchant uploaded. Kept in .env so it can
