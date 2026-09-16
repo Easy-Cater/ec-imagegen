@@ -79,40 +79,34 @@ class ReplicateRestyleProvider(InferenceProvider):
             if image.mode != "RGB":
                 image = image.convert("RGB")
 
-            # --------------------------------------------------------
-            # Normalize image dimensions for Flux.
-            #
-            # Flux works best with dimensions aligned to multiples of
-            # 32. We preserve the aspect ratio and do not crop.
-            # --------------------------------------------------------
+            TARGET_SIZE = 1024  # safe square size, multiple of 64
 
-            TARGET_MULTIPLE = 32
+            # Resize so the longer side fits TARGET_SIZE, preserving
+            # aspect ratio. Mutates `image` in place.
+            image.thumbnail((TARGET_SIZE, TARGET_SIZE), Image.Resampling.LANCZOS)
 
-            width = image.width
-            height = image.height
+            resized_width, resized_height = image.size
 
-            # Round each dimension to the nearest multiple of 32.
-            new_width = round(width / TARGET_MULTIPLE) * TARGET_MULTIPLE
-            new_height = round(height / TARGET_MULTIPLE) * TARGET_MULTIPLE
+            # Pad to an exact TARGET_SIZE x TARGET_SIZE square, centering
+            # the resized photo on a black background.
+            padded = Image.new("RGB", (TARGET_SIZE, TARGET_SIZE), (0, 0, 0))
+            paste_x = (TARGET_SIZE - image.width) // 2
+            paste_y = (TARGET_SIZE - image.height) // 2
+            padded.paste(image, (paste_x, paste_y))
+            image = padded
 
-            # Protect against dimensions becoming too small.
-            new_width = max(TARGET_MULTIPLE, new_width)
-            new_height = max(TARGET_MULTIPLE, new_height)
-
-            if new_width != width or new_height != height:
-                logger.info(
-                    "Resizing image for Flux compatibility: "
-                    "%dx%d -> %dx%d",
-                    width,
-                    height,
-                    new_width,
-                    new_height,
-                )
-
-                image = image.resize(
-                    (new_width, new_height),
-                    Image.Resampling.LANCZOS,
-                )
+            logger.info(
+                "Resized+letterboxed image for Flux compatibility: "
+                "%dx%d -> resized %dx%d -> padded %dx%d (offset %d,%d)",
+                original_width,
+                original_height,
+                resized_width,
+                resized_height,
+                image.width,
+                image.height,
+                paste_x,
+                paste_y,
+            )
 
             processed_image = io.BytesIO()
 
