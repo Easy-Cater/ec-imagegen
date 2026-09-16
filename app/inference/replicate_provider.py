@@ -56,8 +56,7 @@ class ReplicateRestyleProvider(InferenceProvider):
                     model=model,
                     input={
                         "prompt": prompt,
-                        "input_image": io.BytesIO(input_image),
-                        "output_format": output_format,
+                        "image": io.BytesIO(input_image),
                     },
                 )
                 logger.info("Replicate prediction created: id=%s, status=%s", prediction.id, prediction.status)
@@ -79,7 +78,7 @@ class ReplicateRestyleProvider(InferenceProvider):
                         prediction.id,
                         prediction.error,
                         getattr(prediction, "logs", None),
-                        {k: (v if k != "input_image" else "<bytes omitted>")
+                        {k: (v if k != "image" else "<bytes omitted>")
                          for k, v in (prediction.input or {}).items()},
                     )
                     raise InferenceError(

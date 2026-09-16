@@ -30,11 +30,24 @@ _RESTYLE_BASE = (
     "photorealistic, 4k, no text, no watermark, no logos."
 )
 
-# Rotated across a restyle batch (one per variation index, wrapping around if
-# MAX_RESTYLE_VARIATIONS ever exceeds len(this list)) so the N outputs are
-# deliberately distinct instead of relying on model randomness alone. Each
-# entry only nudges lighting/angle/mood — never subject, plate, or dish
-# identity, which the base prompt already locks down.
+# Consumed one-per-generation: index 0 is used for the merchant's initial
+# upload, index 1 for their first "Regenerate" click, index 2 for the
+# second, and so on (see job_service.create_restyle_batch /
+# regenerate_restyle, which set ImageJob.variation_index to the attempt's
+# position in the batch). Kept deliberately longer than the default
+# settings.MAX_IMAGES_PER_BATCH so a merchant who regenerates a few times
+# doesn't quickly loop back to a look they already rejected. If
+# MAX_IMAGES_PER_BATCH is ever raised past len(this list) in .env, it wraps
+# around (see build_restyle_prompt) rather than erroring — extend this list
+# instead of relying on the wraparound for normal operation.
+#
+# Each entry only nudges lighting/angle/mood/background — never subject,
+# plate, or dish identity, which the base prompt already locks down.
+#
+# ImageJob.variation_index records exactly which of these was used for a
+# given row, so later we can analyze which styles particular merchants
+# prefer (see models.ImageJob docstring) — no behavior depends on that
+# analysis yet, this is just data collection for now.
 RESTYLE_VARIATION_STYLES: list[str] = [
     "Style: clean seamless white/light-grey studio backdrop, bright even "
     "natural daylight, minimal soft shadows, top-down or three-quarter angle.",
@@ -44,6 +57,20 @@ RESTYLE_VARIATION_STYLES: list[str] = [
     "Style: dark, moody solid-color or gradient background, dramatic "
     "high-contrast studio lighting with defined highlights, straight-on "
     "eye-level angle.",
+    "Style: soft pastel-colored seamless backdrop, bright diffused "
+    "lighting with almost no visible shadow, direct top-down flat-lay "
+    "angle.",
+    "Style: blurred upscale restaurant interior in the background (bokeh), "
+    "warm golden-hour side lighting, close three-quarter angle at table "
+    "height.",
+    "Style: deep solid jewel-tone background (emerald, burgundy, or navy), "
+    "single soft key light from one side creating gentle falloff, "
+    "slightly elevated angle.",
+    "Style: rustic outdoor daylight setting (garden or patio table, softly "
+    "blurred), natural sunlight with light shadows, relaxed three-quarter "
+    "angle.",
+    "Style: minimalist concrete or slate-grey backdrop, cool-toned "
+    "studio lighting with crisp highlights, straight-on eye-level angle.",
 ]
 
 

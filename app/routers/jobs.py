@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.database import get_db
 from app.db.models import ImageJob
-from app.schemas import JobOut, RestyleBatchOut, SelectRestyleRequest
+from app.schemas import JobOut, RegenerateRestyleRequest, SelectRestyleRequest
 from app.services import job_service
 
 logger = logging.getLogger(__name__)
@@ -75,12 +75,18 @@ def _validate_and_get_ext(photo_bytes: bytes) -> str:
     return ext
 
 
-@router.post("/restyle", response_model=RestyleBatchOut, status_code=201)
+@router.post("/restyle", response_model=JobOut, status_code=201)
 async def create_restyle_batch(
     photo: UploadFile = File(...),
     extra_styling: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    """
+    Merchant uploads one source photo. Generates exactly ONE restyled
+    image. Use POST /jobs/restyle/regenerate afterwards (same batch_id) if
+    the merchant wants to try again, up to settings.MAX_IMAGES_PER_BATCH
+    total attempts.
+    """
     photo_bytes = await photo.read(settings.MAX_UPLOAD_SIZE_BYTES + 1)
     if len(photo_bytes) > settings.MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(
@@ -97,13 +103,29 @@ async def create_restyle_batch(
     elif extra_styling is not None:
         extra_styling = extra_styling.strip()[: settings.MAX_EXTRA_STYLING_LEN] or None
 
-    jobs = job_service.create_restyle_batch(
+    return job_service.create_restyle_batch(
         db,
         extra_styling=extra_styling,
         photo_bytes=photo_bytes,
         photo_ext=photo_ext,
     )
-    return RestyleBatchOut(batch_id=jobs[0].batch_id, jobs=jobs)
+
+
+@router.post("/restyle/regenerate", response_model=JobOut, status_code=201)
+def regenerate_restyle(req: RegenerateRestyleRequest, db: Session = Depends(get_db)):
+    """
+    Merchant didn't like the current image — regenerate against the same
+    source photo. Blocked with 409 if a generation for this batch is
+    already in flight, or if MAX_IMAGES_PER_BATCH has been reached.
+    """
+    try:
+        return job_service.regenerate_restyle(db, req.batch_id)
+    except job_service.RestyleBatchNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except job_service.RestyleGenerationInProgress as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except job_service.RestyleLimitReached as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.post("/restyle/select", response_model=JobOut, status_code=201)
@@ -124,6 +146,11 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
 
 @router.get("/batch/{batch_id}", response_model=list[JobOut])
 def get_batch(batch_id: str, db: Session = Depends(get_db)):
+    """
+    Full attempt history for a batch, ordered oldest-first (variation_index
+    0 = original upload). Frontend uses len(result) vs MAX_IMAGES_PER_BATCH
+    to decide whether to show the Regenerate button.
+    """
     jobs = db.query(ImageJob).filter(ImageJob.batch_id == batch_id).order_by(ImageJob.created_at).all()
     if not jobs:
         raise HTTPException(status_code=404, detail="Batch not found")

@@ -25,13 +25,28 @@ class JobStatus(str, enum.Enum):
 
 class ImageJob(Base):
     """
-    One row per generated image.
+    One row per generated *attempt*.
 
-    Restyle-only service: one uploaded source photo -> MAX_RESTYLE_VARIATIONS
-    rows sharing batch_id + source_image_path, each with a different
-    variation_index (-> a different rotated style directive, see
-    prompt_builder.RESTYLE_VARIATION_STYLES). The merchant picks a favorite;
-    is_selected marks it (enforced unique-per-batch in job_service, not DB).
+    Restyle-only service: one uploaded source photo -> one ImageJob per
+    generation attempt, all sharing batch_id + source_image_path.
+    variation_index records the attempt's position within the batch (0 =
+    the merchant's initial upload, 1 = their first "Regenerate" click, 2 =
+    the second, ...) and also indexes into
+    prompt_builder.RESTYLE_VARIATION_STYLES, so it doubles as a record of
+    which lighting/background style produced this image — useful later for
+    seeing which styles particular merchants gravitate towards.
+
+    Rows are only ever appended one at a time, driven by the merchant
+    clicking Regenerate (see services.job_service.regenerate_restyle),
+    capped at settings.MAX_IMAGES_PER_BATCH total rows per batch. Rejected
+    attempts are kept (not deleted) for now so this history exists if
+    needed later; when that's no longer wanted, non-selected rows for a
+    batch can simply be deleted (`DELETE FROM image_jobs WHERE batch_id =
+    ... AND is_selected = false`, plus removing their image_path files from
+    storage) — nothing else references them, so pruning is safe.
+
+    The merchant picks a favorite; is_selected marks it (enforced
+    unique-per-batch in job_service, not DB).
 
     The full prompt text is NOT stored — it's fully deterministic from
     (variation_index, extra_styling), so it's rebuilt on demand in the
@@ -55,6 +70,11 @@ class ImageJob(Base):
     is_selected: Mapped[bool] = mapped_column(Boolean, default=False)
 
     image_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # NOTE: column name is legacy from the Replicate/USD era. Since the
+    # switch to fal.ai, this now stores the INR price
+    # (settings.RESTYLE_PRICE_PER_IMAGE_INR), not USD. Left unrenamed to
+    # avoid a migration — rename to cost_inr in a future cleanup pass along
+    # with schemas.JobOut.cost_usd.
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 

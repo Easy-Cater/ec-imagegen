@@ -14,9 +14,26 @@ class Settings(BaseSettings):
     )
 
     # --- Inference provider (image-to-image restyle only) ---
+    # Which provider worker.py actually calls, via app.inference.provider_factory.
+    # "fal" or "replicate" — switching is a .env change only, no redeploy.
+    # Neither provider's SDK/config below is deleted when unused, so you can
+    # flip back and forth freely while deciding.
+    INFERENCE_PROVIDER: str = "fal"
+
+    # fal.ai — FAL_KEY is read by the fal_client SDK from this setting (we
+    # inject it into the environment at provider construction time).
+    FAL_KEY: str = ""
+    FAL_RESTYLE_MODEL: str = "fal-ai/flux-2/turbo/edit"
+    # Merchant-facing price recorded per generated image, in INR (business
+    # decision — not derived from fal's per-megapixel USD billing formula).
+    RESTYLE_PRICE_PER_IMAGE_INR: float = 0.7
+
+    # Replicate — Flux Kontext Pro (or whatever REPLICATE_RESTYLE_MODEL is
+    # set to). Kept fully wired up as a fallback/alternative to fal.ai.
     REPLICATE_API_TOKEN: str = ""
-    RESTYLE_MODEL: str = "black-forest-labs/flux-kontext-pro"
+    REPLICATE_RESTYLE_MODEL: str = "black-forest-labs/flux-kontext-pro"
     RESTYLE_PRICE_PER_IMAGE_USD: float = 0.04
+
     RESTYLE_POLL_TIMEOUT_SECONDS: int = 180
 
     # --- Upload validation ---
@@ -28,7 +45,13 @@ class Settings(BaseSettings):
     # styling notes with that max length, no code change needed.
     MAX_EXTRA_STYLING_LEN: int | None = None
 
-    MAX_RESTYLE_VARIATIONS: int = 3
+    # One image is generated per upload; the merchant can then click
+    # "Regenerate" to try again against the same source photo. This caps
+    # the TOTAL number of attempts in a batch, the original included — e.g.
+    # a value of 4 means 1 initial generation + up to 3 regenerations.
+    # Enforced server-side in job_service.regenerate_restyle, never trust
+    # the frontend button being disabled alone.
+    MAX_IMAGES_PER_BATCH: int = 4
     IMAGE_SIZE: str = "1024x1024"
 
     # --- Storage (local disk for now; swap for S3 client later) ---
@@ -61,7 +84,7 @@ class Settings(BaseSettings):
     REQUEST_TIMEOUT_SECONDS: int = 60
     MAX_RETRIES: int = 3
     RETRY_BACKOFF_SECONDS: float = 2.0
-    
+
     # Format Replicate returns the restyled output in, and the extension it's
     # saved with. Not tied to the input format — every job outputs this same
     # format regardless of what the merchant uploaded. Kept in .env so it can
@@ -72,6 +95,13 @@ class Settings(BaseSettings):
     @property
     def allowed_image_formats_set(self) -> set[str]:
         return {f.strip().upper() for f in self.ALLOWED_IMAGE_FORMATS.split(",") if f.strip()}
+
+    @property
+    def active_restyle_model(self) -> str:
+        """The model id to pass to whichever provider INFERENCE_PROVIDER selects."""
+        if self.INFERENCE_PROVIDER.strip().lower() == "replicate":
+            return self.REPLICATE_RESTYLE_MODEL
+        return self.FAL_RESTYLE_MODEL
 
 
 @lru_cache

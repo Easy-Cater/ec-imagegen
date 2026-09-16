@@ -6,7 +6,7 @@ from app.core.config import get_settings
 from app.db.database import SessionLocal
 from app.db.models import ImageJob, JobStatus
 from app.inference.base import InferenceError
-from app.inference.replicate_provider import get_restyle_provider
+from app.inference.provider_factory import get_restyle_provider
 from app.services.prompt_builder import build_restyle_prompt
 from app.services.storage import get_storage
 
@@ -42,10 +42,11 @@ def process_image_job(job_id: int) -> None:
     actual async HTTP call via asyncio.run.
 
     Image-to-image restyle only: every job reads the merchant's uploaded
-    source photo from storage and sends it + a prompt to Replicate/Flux
-    Kontext. The prompt itself is not stored in the DB (it's fully
-    deterministic from variation_index + extra_styling), so it's rebuilt
-    here and logged for debugging.
+    source photo from storage and sends it + a prompt to whichever provider
+    settings.INFERENCE_PROVIDER selects (fal.ai or Replicate — see
+    app.inference.provider_factory). The prompt itself is not stored in the
+    DB (it's fully deterministic from variation_index + extra_styling), so
+    it's rebuilt here and logged for debugging.
 
     job.error_message stores a short, human-readable summary only — full
     technical detail always goes to the logger, never to the DB.
@@ -68,10 +69,11 @@ def process_image_job(job_id: int) -> None:
         db.commit()
 
         logger.info(
-            "image_generation_started job_id=%s batch_id=%s status=%s",
+            "image_generation_started job_id=%s batch_id=%s status=%s provider=%s",
             job.id,
             job.batch_id,
             job.status.value,
+            settings.INFERENCE_PROVIDER,
         )
 
         storage = get_storage(settings)
@@ -97,7 +99,7 @@ def process_image_job(job_id: int) -> None:
             result = asyncio.run(
                 provider.generate(
                     prompt=prompt,
-                    model=settings.RESTYLE_MODEL,
+                    model=settings.active_restyle_model,
                     size=settings.IMAGE_SIZE,
                     input_image=source_bytes,
                 )
