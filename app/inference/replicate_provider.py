@@ -1,10 +1,17 @@
 """
 Replicate implementation of InferenceProvider — image-to-image restyling
-via Flux img2img.
+via black-forest-labs/flux-kontext-dev.
 
 Takes an uploaded merchant photo + prompt, preprocesses the image to
 dimensions compatible with the Flux model, and returns a professionally
 restyled version.
+
+flux-kontext-dev is an instruction-following edit model (same family as
+flux-kontext-pro), not a denoising-strength img2img workflow — it reads
+the prompt as an edit instruction and preserves the source image's
+content unless told to change it, so no denoising/steps tuning is
+required to keep the dish intact. Its input schema uses "input_image"
+(not "image") and "prompt" (not "positive_prompt").
 """
 import asyncio
 import io
@@ -27,6 +34,13 @@ _FORMAT_TO_CONTENT_TYPE = {
     "png": "image/png",
     "webp": "image/webp",
 }
+
+# flux-kontext-dev generation settings. Not yet exposed via Settings/.env —
+# hardcoded here for now.
+_RESTYLE_GUIDANCE = 2.5
+_RESTYLE_NUM_INFERENCE_STEPS = 30
+_RESTYLE_OUTPUT_QUALITY = 80
+_RESTYLE_GO_FAST = True
 
 
 class ReplicateRestyleProvider(InferenceProvider):
@@ -137,11 +151,13 @@ class ReplicateRestyleProvider(InferenceProvider):
 
         logger.info(
             "Replicate restyle starting: model=%s, prompt_len=%d, "
-            "image_size_bytes=%d, output_format=%s",
+            "image_size_bytes=%d, output_format=%s, guidance=%.2f, steps=%d",
             model,
             len(prompt),
             len(processed_input_image),
             output_format,
+            _RESTYLE_GUIDANCE,
+            _RESTYLE_NUM_INFERENCE_STEPS,
         )
 
         # ------------------------------------------------------------
@@ -150,10 +166,25 @@ class ReplicateRestyleProvider(InferenceProvider):
         for attempt in range(1, settings.MAX_RETRIES + 1):
             try:
                 prediction = self._client.predictions.create(
-                    version=model,
+                    # NOTE: flux-kontext-dev is an official Replicate model
+                    # (versionless) — it's invoked via "model=owner/name",
+                    # not "version=<hash>". "version" is for pinning a
+                    # specific version id on community models; passing an
+                    # owner/name string there is invalid and is why the
+                    # prediction previously got stuck at status="starting"
+                    # forever instead of ever moving to "processing".
+                    model=model,
                     input={
+                        # NOTE: flux-kontext-dev reads "input_image" (not
+                        # "image") and "prompt" (not "positive_prompt").
+                        "input_image": io.BytesIO(processed_input_image),
                         "prompt": prompt,
-                        "image": io.BytesIO(processed_input_image),
+                        "aspect_ratio": "match_input_image",
+                        "guidance": _RESTYLE_GUIDANCE,
+                        "num_inference_steps": _RESTYLE_NUM_INFERENCE_STEPS,
+                        "output_format": output_format,
+                        "output_quality": _RESTYLE_OUTPUT_QUALITY,
+                        "go_fast": _RESTYLE_GO_FAST,
                     },
                 )
 
@@ -177,10 +208,30 @@ class ReplicateRestyleProvider(InferenceProvider):
                         time.time() - poll_start
                         > settings.RESTYLE_POLL_TIMEOUT_SECONDS
                     ):
+                        # Cancel it on Replicate's side so it stops running
+                        # (and billing) in the background — previously this
+                        # just gave up locally and retried with a BRAND NEW
+                        # prediction while the old one kept running and
+                        # still got billed on completion. That was silently
+                        # doubling/tripling cost per job.
+                        try:
+                            self._client.predictions.cancel(prediction.id)
+                        except Exception:
+                            logger.exception(
+                                "Failed to cancel timed-out prediction %s",
+                                prediction.id,
+                            )
+                        # Not retryable: a timeout here means
+                        # RESTYLE_POLL_TIMEOUT_SECONDS is set below this
+                        # model's normal queue+run time, not a transient
+                        # failure — retrying just pays for another full run.
+                        # Raise the poll timeout in settings/.env instead.
                         raise InferenceError(
                             f"Replicate prediction {prediction.id} timed out "
-                            f"(last status: {prediction.status})",
-                            retryable=True,
+                            f"(last status: {prediction.status}) and was "
+                            f"canceled. If this happens under normal load, "
+                            f"raise RESTYLE_POLL_TIMEOUT_SECONDS.",
+                            retryable=False,
                         )
 
                     time.sleep(3)
@@ -204,7 +255,7 @@ class ReplicateRestyleProvider(InferenceProvider):
                         {
                             k: (
                                 v
-                                if k != "image"
+                                if k != "input_image"
                                 else "<bytes omitted>"
                             )
                             for k, v in (
