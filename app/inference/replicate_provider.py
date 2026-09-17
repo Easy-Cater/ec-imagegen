@@ -1,17 +1,23 @@
 """
 Replicate implementation of InferenceProvider — image-to-image restyling
-via black-forest-labs/flux-kontext-dev.
+via black-forest-labs/flux-kontext-pro.
 
 Takes an uploaded merchant photo + prompt, preprocesses the image to
 dimensions compatible with the Flux model, and returns a professionally
 restyled version.
 
-flux-kontext-dev is an instruction-following edit model (same family as
-flux-kontext-pro), not a denoising-strength img2img workflow — it reads
+flux-kontext-pro is an instruction-following edit model (same family as
+flux-kontext-dev), not a denoising-strength img2img workflow — it reads
 the prompt as an edit instruction and preserves the source image's
 content unless told to change it, so no denoising/steps tuning is
 required to keep the dish intact. Its input schema uses "input_image"
 (not "image") and "prompt" (not "positive_prompt").
+
+NOTE: unlike flux-kontext-dev, kontext-pro is a hosted, versionless model
+with a smaller input schema — it does NOT accept "guidance",
+"num_inference_steps", "output_quality", or "go_fast" (those are dev-only
+open-weight inference knobs). Passing them is either ignored or rejected,
+so they've been removed from the input payload below.
 """
 import asyncio
 import io
@@ -34,13 +40,6 @@ _FORMAT_TO_CONTENT_TYPE = {
     "png": "image/png",
     "webp": "image/webp",
 }
-
-# flux-kontext-dev generation settings. Not yet exposed via Settings/.env —
-# hardcoded here for now.
-_RESTYLE_GUIDANCE = 2.5
-_RESTYLE_NUM_INFERENCE_STEPS = 30
-_RESTYLE_OUTPUT_QUALITY = 80
-_RESTYLE_GO_FAST = True
 
 
 class ReplicateRestyleProvider(InferenceProvider):
@@ -151,13 +150,11 @@ class ReplicateRestyleProvider(InferenceProvider):
 
         logger.info(
             "Replicate restyle starting: model=%s, prompt_len=%d, "
-            "image_size_bytes=%d, output_format=%s, guidance=%.2f, steps=%d",
+            "image_size_bytes=%d, output_format=%s",
             model,
             len(prompt),
             len(processed_input_image),
             output_format,
-            _RESTYLE_GUIDANCE,
-            _RESTYLE_NUM_INFERENCE_STEPS,
         )
 
         # ------------------------------------------------------------
@@ -166,7 +163,7 @@ class ReplicateRestyleProvider(InferenceProvider):
         for attempt in range(1, settings.MAX_RETRIES + 1):
             try:
                 prediction = self._client.predictions.create(
-                    # NOTE: flux-kontext-dev is an official Replicate model
+                    # NOTE: flux-kontext-pro is an official Replicate model
                     # (versionless) — it's invoked via "model=owner/name",
                     # not "version=<hash>". "version" is for pinning a
                     # specific version id on community models; passing an
@@ -175,16 +172,10 @@ class ReplicateRestyleProvider(InferenceProvider):
                     # forever instead of ever moving to "processing".
                     model=model,
                     input={
-                        # NOTE: flux-kontext-dev reads "input_image" (not
-                        # "image") and "prompt" (not "positive_prompt").
                         "input_image": io.BytesIO(processed_input_image),
                         "prompt": prompt,
                         "aspect_ratio": "match_input_image",
-                        "guidance": _RESTYLE_GUIDANCE,
-                        "num_inference_steps": _RESTYLE_NUM_INFERENCE_STEPS,
                         "output_format": output_format,
-                        "output_quality": _RESTYLE_OUTPUT_QUALITY,
-                        "go_fast": _RESTYLE_GO_FAST,
                     },
                 )
 
