@@ -18,6 +18,17 @@ class RestyleJobNotFound(Exception):
     pass
 
 
+class RestyleJobNotSelectable(Exception):
+    """
+    Job exists but its status isn't COMPLETED (e.g. FAILED, PENDING, or
+    PROCESSING) — it has no usable image_path, so it cannot be marked as
+    the merchant's selected result. Raised instead of silently setting
+    is_selected=True on a job with no image, which would corrupt the
+    "one selected job per batch" guarantee.
+    """
+    pass
+
+
 class RestyleBatchNotFound(Exception):
     """No ImageJob rows exist with the given batch_id."""
     pass
@@ -143,10 +154,22 @@ def select_restyle(db: Session, job_id: int) -> ImageJob:
     not enqueue a new render — the chosen output is already full quality —
     it just records the preference and clears any prior selection in the
     same batch.
+
+    Only a COMPLETED job (i.e. one that actually has a generated
+    image_path) can be selected. FAILED/PENDING/PROCESSING jobs are
+    rejected with RestyleJobNotSelectable — selecting one of those would
+    mark a batch's "final pick" as a job with no image, which the
+    frontend has no sane way to render.
     """
     chosen = db.get(ImageJob, job_id)
     if chosen is None:
         raise RestyleJobNotFound(f"No restyle job with id {job_id}")
+
+    if chosen.status != JobStatus.COMPLETED:
+        raise RestyleJobNotSelectable(
+            f"Job {job_id} has status '{chosen.status.value}', not completed — "
+            f"it has no image and cannot be selected"
+        )
 
     db.query(ImageJob).filter(
         ImageJob.batch_id == chosen.batch_id,

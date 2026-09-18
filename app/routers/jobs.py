@@ -130,10 +130,17 @@ def regenerate_restyle(req: RegenerateRestyleRequest, db: Session = Depends(get_
 
 @router.post("/restyle/select", response_model=JobOut, status_code=201)
 def select_restyle(req: SelectRestyleRequest, db: Session = Depends(get_db)):
+    """
+    Merchant picked their favorite completed attempt. Rejected with 404 if
+    the job_id doesn't exist, or 409 if it exists but isn't COMPLETED
+    (e.g. a FAILED attempt with no image) — see job_service.select_restyle.
+    """
     try:
         return job_service.select_restyle(db, req.job_id)
     except job_service.RestyleJobNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except job_service.RestyleJobNotSelectable as e:
+        raise HTTPException(status_code=409, detail=str(e))
 
 
 @router.get("/{job_id}", response_model=JobOut)
