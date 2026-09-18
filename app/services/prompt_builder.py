@@ -13,7 +13,10 @@ food's structure/texture ("weird noise", flat lighting) than explicit
 """
 
 _RESTYLE_BASE = (
-    "Edit this food photo. Follow these instructions exactly and in order:\n"
+    "Edit this food photo. CRITICAL CONSTRAINT: the background must NEVER "
+    "be plain white, off-white, or a pale featureless void. It must always "
+    "be a clearly visible, textured, colored real-world surface. Follow "
+    "these instructions exactly and in order:\n"
     "1. Do not change the food itself in any way: keep the exact same dish, "
     "same ingredients, same portion size, same plate/bowl/container, same "
     "arrangement, same shape, same texture, same proportions. Do not "
@@ -22,18 +25,18 @@ _RESTYLE_BASE = (
     "re-lighting, re-compositing, and re-framing it as instructed below.\n"
     "2. Remove any hand, fingers, arm, or body part holding or touching the "
     "food or its container.\n"
-    "3. Replace the background with a light neutral commercial food-"
-    "photography surface - for example pale wood, light stone, matte "
-    "concrete, or a soft light-grey seamless backdrop. Do NOT make the "
-    "background a flat, pure-white, texture-less void with no visible "
-    "surface - the plate/bowl must appear to be resting on a real surface, "
-    "not floating in empty white space. Remove ALL background elements "
+    "3. Freely choose ONE realistic, richly textured commercial food-"
+    "photography surface for the background - for example dark walnut "
+    "wood, pale oak wood, matte concrete, natural stone, slate, marble, "
+    "linen fabric, or a bold solid-color seamless backdrop (any color "
+    "except white/cream/ivory/pale-grey). Whatever you choose, its color "
+    "and texture must be clearly visible and distinguishable from the "
+    "plate - never wash it out to white or near-white. The plate/bowl must "
+    "visibly rest ON this surface. Remove ALL background elements "
     "unrelated to the dish - including plants, leaves, foliage, greenery, "
     "furniture, walls, floor tiles, decor, and any other object in the "
     "original photo - along with all clutter, other dishes, packaging, "
-    "cables, stains, and messy table surface from the original shot. The "
-    "final background must contain nothing except the chosen studio "
-    "surface/backdrop.\n"
+    "cables, stains, and messy table surface from the original shot.\n"
     "4. Add professional studio lighting with realistic soft shadows and "
     "highlights that follow the food's actual shape - do not add glow, "
     "haze, plastic sheen, or painterly softness to the food itself. "
@@ -56,9 +59,10 @@ _RESTYLE_BASE = (
     "painting, illustration, HDR, or oversharpened look - the result must "
     "look like an unedited, in-camera DSLR photograph with natural noise "
     "and texture, not an AI-generated or artificial rendering. No text, no "
-    "watermark, no logos."
+    "watermark, no logos. FINAL REMINDER: the background must be a "
+    "clearly colored, clearly textured real surface - a white, cream, or "
+    "pale-grey empty background is a failed result and not acceptable."
 )
-
 # DISABLED. Previously consumed one-per-generation: index 0 for the
 # merchant's initial upload, index 1 for their first "Regenerate" click,
 # etc (see job_service.create_restyle_batch / regenerate_restyle, which
