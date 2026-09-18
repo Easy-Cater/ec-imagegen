@@ -92,19 +92,25 @@ class ReplicateRestyleProvider(InferenceProvider):
             if image.mode != "RGB":
                 image = image.convert("RGB")
 
-            TARGET_SIZE = 1024  # safe square size, multiple of 64
-
-            # Resize so the longer side fits TARGET_SIZE, preserving
-            # aspect ratio. Mutates `image` in place.
-            image.thumbnail((TARGET_SIZE, TARGET_SIZE), Image.Resampling.LANCZOS)
+            # Target output aspect ratio: 5:3 (width:height). Both dimensions are
+            # multiples of 64 (Flux requirement) and give an exact 5:3 ratio —
+            # 1280/768 = 1.666... = 5/3. Combined with "aspect_ratio": "match_input_image"
+            # below, this is what actually determines the output shape: Replicate
+            # outputs whatever shape the input canvas is, so building a 5:3 canvas
+            # here means a 5:3 output.
+            TARGET_WIDTH = 1280
+            TARGET_HEIGHT = 768
+            # Resize so the photo fits fully inside the 5:3 canvas, preserving its
+            # own aspect ratio (no stretching/distortion of the dish itself).
+            image.thumbnail((TARGET_WIDTH, TARGET_HEIGHT), Image.Resampling.LANCZOS)
 
             resized_width, resized_height = image.size
 
-            # Pad to an exact TARGET_SIZE x TARGET_SIZE square, centering
-            # the resized photo on a black background.
-            padded = Image.new("RGB", (TARGET_SIZE, TARGET_SIZE), (0, 0, 0))
-            paste_x = (TARGET_SIZE - image.width) // 2
-            paste_y = (TARGET_SIZE - image.height) // 2
+            # Pad to an exact TARGET_WIDTH x TARGET_HEIGHT 5:3 canvas, centering the
+            # resized photo on a black background.
+            padded = Image.new("RGB", (TARGET_WIDTH, TARGET_HEIGHT), (0, 0, 0))
+            paste_x = (TARGET_WIDTH - image.width) // 2
+            paste_y = (TARGET_HEIGHT - image.height) // 2
             padded.paste(image, (paste_x, paste_y))
             image = padded
 
