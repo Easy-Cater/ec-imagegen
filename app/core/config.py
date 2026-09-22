@@ -59,6 +59,8 @@ class Settings(BaseSettings):
     LOCAL_STORAGE_DIR: str = str(_PROJECT_ROOT / "storage")
     S3_BUCKET: str = ""
     S3_REGION: str = ""
+    S3_PREFIX: str = "ec-imagegen"         # -> s3://easycatering-internal/ec-imagegen/<key>
+    MIRROR_TO_S3: bool = False
 
     @field_validator("LOCAL_STORAGE_DIR", mode="before")
     @classmethod
