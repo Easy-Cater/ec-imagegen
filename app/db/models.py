@@ -58,6 +58,20 @@ class ImageJob(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     batch_id: Mapped[str] = mapped_column(String(36), default=_uuid, index=True)
 
+    # Human-readable sequential number (1, 2, 3, ...) used ONLY to name the
+    # storage folder (local disk + S3), so files are easy to spot by eye
+    # instead of by UUID. batch_id above remains the real identifier used
+    # by every endpoint, schema, and the frontend — this column is not
+    # exposed via the API and nothing outside app/services/storage.py and
+    # app/worker.py should read it.
+    # Nullable so pre-existing rows (created before this column existed)
+    # don't break; those batches simply keep their old UUID-named folder
+    # forever (storage.py falls back to batch_id when this is None).
+    # Allocated once per batch (in job_service.create_restyle_batch) via an
+    # atomic Redis INCR — see job_service.py — and reused unchanged by every
+    # regenerate attempt in the same batch so they land in the same folder.
+    batch_number: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.PENDING, index=True)
 
     variation_index: Mapped[int] = mapped_column(Integer, default=0)

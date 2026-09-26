@@ -5,9 +5,18 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.db.models import ImageJob, JobStatus
-from app.queue import image_queue
+from app.queue import image_queue, redis_conn
 from app.services.storage import get_storage
 from app.worker import process_image_job
+
+# Redis key backing the atomic counter that hands out batch_number values
+# (1, 2, 3, ...) for storage folder naming. INCR is atomic in Redis, so this
+# is safe under concurrent uploads without needing a DB-level sequence.
+_BATCH_NUMBER_COUNTER_KEY = "restyle:batch_number_seq"
+
+
+def _next_batch_number() -> int:
+    return redis_conn.incr(_BATCH_NUMBER_COUNTER_KEY)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -72,12 +81,17 @@ def create_restyle_batch(
     """
     storage = get_storage(settings)
     batch_id = str(uuid.uuid4())
+    batch_number = _next_batch_number()
 
-    source_key = storage.build_key(batch_id=batch_id, name="source", ext=photo_ext)
+    # NOTE: batch_number (not batch_id) is what names the folder in storage
+    # now — purely so files are easy to spot by eye. batch_id UUID is still
+    # the real identifier used everywhere else (API, DB lookups, frontend).
+    source_key = storage.build_key(batch_id=str(batch_number), name="source", ext=photo_ext)
     source_path = storage.save(key=source_key, content=photo_bytes)
 
     job = ImageJob(
         batch_id=batch_id,
+        batch_number=batch_number,
         status=JobStatus.PENDING,
         variation_index=0,
         extra_styling=extra_styling,
@@ -132,6 +146,7 @@ def regenerate_restyle(db: Session, batch_id: str) -> ImageJob:
 
     job = ImageJob(
         batch_id=batch_id,
+        batch_number=template.batch_number,  # same folder as the rest of this batch
         status=JobStatus.PENDING,
         variation_index=next_index,
         extra_styling=template.extra_styling,

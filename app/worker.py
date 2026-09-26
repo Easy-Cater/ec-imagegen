@@ -158,8 +158,13 @@ def process_image_job(job_id: int) -> None:
 
         provider_seconds = time.perf_counter() - provider_started_at
         storage_started_at = time.perf_counter()
+        # Use the human-readable batch_number for the folder name (matches
+        # the source image saved in job_service.py). Falls back to the
+        # UUID batch_id for rows created before batch_number existed, so
+        # those older in-flight batches still land in their original folder.
+        folder_name = str(job.batch_number) if job.batch_number is not None else job.batch_id
         key = storage.build_key(
-            batch_id=job.batch_id,
+            batch_id=folder_name,
             name=f"restyle_{job.variation_index}",
             ext=settings.OUTPUT_IMAGE_FORMAT,
         )

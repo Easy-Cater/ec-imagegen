@@ -33,3 +33,5 @@ Thumbs.db
 dump.rdb
 
 scripts/
+addon_test_output/
+banner_benchmark_out/
