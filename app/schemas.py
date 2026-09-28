@@ -18,12 +18,23 @@ class JobOut(BaseModel):
     # Frontend uses this + MAX_IMAGES_PER_BATCH to show "Attempt 2 of 4" and
     # to know when to grey out the Regenerate button.
     variation_index: int
+    style_index: int | None = None
     model_used: str | None
     source_image_path: str | None
     is_selected: bool
     image_path: str | None
     cost_usd: float | None
     error_message: str | None
+
+
+class StyleOut(BaseModel):
+    index: int
+    label: str
+
+
+class GenerateRestyleRequest(BaseModel):
+    batch_id: str
+    style_index: int
 
 
 class RegenerateRestyleRequest(BaseModel):

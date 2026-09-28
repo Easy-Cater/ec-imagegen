@@ -8,15 +8,14 @@ flux-kontext-dev) — numbered, concrete edit steps rather than descriptive/
 narrative language, since these models parse prompts as instructions to
 execute, not as a scene description to render from scratch.
 
-variation_index behavior:
-  - index 0 (the merchant's initial upload — first click on "Restyle")
-    uses _FIRST_SURFACE_INSTRUCTION for step 3 — lets the model freely
-    choose the surface. This is the exact original behavior that was
-    already proven to produce strong, reliable first results.
-  - index 1+ (each "Regenerate" click) uses one entry from
-    RESTYLE_VARIATION_STYLES for step 3 instead, so each regenerate
-    attempt gets a visibly different, deliberately-chosen surface rather
-    than leaving it to the model's own randomness.
+style_index behavior:
+  - The merchant picks one entry of RESTYLE_VARIATION_STYLES after uploading
+    the photo; that entry is used for step 3 of the prompt.
+  - Each "Regenerate" is assigned a different, not-yet-used style by
+    job_service.regenerate_restyle, and it arrives here the same way.
+  - style_index=None (regenerates after every curated style has been used,
+    and legacy rows) lets the model freely choose the surface via
+    _FIRST_SURFACE_INSTRUCTION.
 
 Both cases share the exact same surrounding instructions (steps 1, 2, 4,
 5, 6 + the white-background constraint) via _build_prompt() — only step 3
@@ -129,6 +128,27 @@ RESTYLE_VARIATION_STYLES: list[str] = [
 ]
 
 
+# Short merchant-facing names, SAME ORDER as RESTYLE_VARIATION_STYLES.
+RESTYLE_STYLE_LABELS: list[str] = [
+    "Warm Wood",
+    "Dark Slate",
+    "Marble",
+    "Rustic Outdoor",
+    "Jewel Tone",
+    "Restaurant Blur",
+    "Premium Studio",
+]
+
+assert len(RESTYLE_STYLE_LABELS) == len(RESTYLE_VARIATION_STYLES), (
+    "RESTYLE_STYLE_LABELS and RESTYLE_VARIATION_STYLES must have the same length"
+)
+
+
+def get_style_options() -> list[dict]:
+    """Options shown to the merchant after they upload a photo."""
+    return [{"index": i, "label": label} for i, label in enumerate(RESTYLE_STYLE_LABELS)]
+
+
 def _build_prompt(surface_instruction: str) -> str:
     """
     Shared template used for BOTH the first generation and every
@@ -185,20 +205,17 @@ def _build_prompt(surface_instruction: str) -> str:
     )
 
 
-def build_restyle_prompt(extra_styling: str | None, variation_index: int = 0) -> str:
+def build_restyle_prompt(extra_styling: str | None, style_index: int | None = None) -> str:
     """
-    index 0 -> model freely picks the surface (unchanged, proven
-    first-generation behavior). index 1+ -> a specific style from
-    RESTYLE_VARIATION_STYLES, selected via (variation_index - 1) %
-    len(...) so regenerate attempts cycle 0,1,2,3,4,5,0,1,... instead of
-    skipping style #1 on the first regenerate.
+    style_index -> the merchant-selected (or auto-assigned regenerate) entry
+    of RESTYLE_VARIATION_STYLES. None -> model freely picks the surface.
     """
-    if variation_index == 0:
+    if style_index is None:
         surface_instruction = _FIRST_SURFACE_INSTRUCTION
     else:
-        surface_instruction = RESTYLE_VARIATION_STYLES[
-            (variation_index - 1) % len(RESTYLE_VARIATION_STYLES)
-        ]
+        if not 0 <= style_index < len(RESTYLE_VARIATION_STYLES):
+            raise ValueError(f"style_index {style_index} out of range")
+        surface_instruction = RESTYLE_VARIATION_STYLES[style_index]
 
     base = _build_prompt(surface_instruction)
 

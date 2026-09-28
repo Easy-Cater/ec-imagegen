@@ -7,6 +7,7 @@ from app.core.config import get_settings
 from app.db.models import ImageJob, JobStatus
 from app.queue import image_queue, redis_conn
 from app.services.storage import get_storage
+from app.services.prompt_builder import RESTYLE_VARIATION_STYLES
 from app.worker import process_image_job
 
 # Redis key backing the atomic counter that hands out batch_number values
@@ -62,6 +63,21 @@ class RestyleLimitReached(Exception):
     pass
 
 
+class RestyleStyleNotChosen(Exception):
+    """The batch is still AWAITING_STYLE — the merchant hasn't picked a style yet."""
+    pass
+
+
+class RestyleStyleAlreadyChosen(Exception):
+    """A style was already chosen (generation already started) for this batch."""
+    pass
+
+
+class InvalidRestyleStyle(Exception):
+    """style_index is outside the range of available styles."""
+    pass
+
+
 def create_restyle_batch(
     db: Session,
     *,
@@ -70,11 +86,9 @@ def create_restyle_batch(
     photo_ext: str,
 ) -> ImageJob:
     """
-    Merchant uploaded their own photo — restyle it via the configured
-    inference provider (fal.ai / Replicate) into a single professional
-    image. This creates and enqueues exactly ONE job (variation_index=0).
-    Further images for the same batch only come from regenerate_restyle,
-    one at a time, driven by the merchant clicking "Regenerate" in the UI.
+    Merchant uploaded their own photo. Saves it and creates the batch in
+    AWAITING_STYLE state — nothing is enqueued and no provider is called
+    until the merchant picks a style (see start_restyle).
 
     photo_ext is the *validated* real extension (see jobs.py), never the
     client-supplied filename — avoids trusting user input in a storage path.
@@ -92,7 +106,7 @@ def create_restyle_batch(
     job = ImageJob(
         batch_id=batch_id,
         batch_number=batch_number,
-        status=JobStatus.PENDING,
+        status=JobStatus.AWAITING_STYLE,
         variation_index=0,
         extra_styling=extra_styling,
         source_image_path=source_path,
@@ -100,26 +114,71 @@ def create_restyle_batch(
     db.add(job)
     db.commit()
     db.refresh(job)
+    return job
+
+
+def start_restyle(db: Session, batch_id: str, style_index: int) -> ImageJob:
+    """
+    Merchant picked a style: record it on the batch's first job and enqueue
+    the generation. Row is locked so a double-click can't start it twice.
+    """
+    if not 0 <= style_index < len(RESTYLE_VARIATION_STYLES):
+        raise InvalidRestyleStyle(
+            f"style_index must be between 0 and {len(RESTYLE_VARIATION_STYLES) - 1}"
+        )
+
+    if db.query(ImageJob).filter(ImageJob.batch_id == batch_id).count() == 0:
+        raise RestyleBatchNotFound(f"No batch with id {batch_id}")
+
+    job = (
+        db.query(ImageJob)
+        .filter(ImageJob.batch_id == batch_id, ImageJob.status == JobStatus.AWAITING_STYLE)
+        .with_for_update()
+        .first()
+    )
+    if job is None:
+        raise RestyleStyleAlreadyChosen(f"A style was already chosen for batch {batch_id}")
+
+    job.style_index = style_index
+    job.status = JobStatus.PENDING
+    db.commit()
+    db.refresh(job)
 
     image_queue.enqueue(
         process_image_job, job.id, job_timeout=settings.RESTYLE_JOB_TIMEOUT_SECONDS
     )
-
     return job
+
+
+def _next_unused_style(existing: list[ImageJob]) -> int | None:
+    """
+    Continues after the merchant's first pick and wraps around, skipping
+    styles already used in this batch. E.g. first pick 2 of 7 -> 3,4,5,6,0,1.
+    Returns None when every style has been used (caller then lets the model
+    choose the surface freely).
+    """
+    total = len(RESTYLE_VARIATION_STYLES)
+    used = {job.style_index for job in existing if job.style_index is not None}
+    first = existing[0].style_index or 0
+    for step in range(1, total + 1):
+        candidate = (first + step) % total
+        if candidate not in used:
+            return candidate
+    return None
 
 
 def regenerate_restyle(db: Session, batch_id: str) -> ImageJob:
     """
     Merchant didn't like the current image and clicked "Regenerate": run
-    the SAME source photo through the provider again with the next style
-    variation, as a new row in the same batch.
+    the SAME source photo through the provider again with the next unused
+    style (or, once all styles are used, a model-chosen surface), as a new row in the same batch.
 
-    Guards (both enforced here, server-side — never trust the frontend
+    Guards (all enforced here, server-side — never trust the frontend
     button being disabled):
+      - RestyleStyleNotChosen: the merchant hasn't picked a first style yet.
       - RestyleGenerationInProgress: another attempt in this batch is still
         PENDING/PROCESSING.
-      - RestyleLimitReached: the batch already has
-        settings.MAX_IMAGES_PER_BATCH rows (original included).
+      - RestyleLimitReached: MAX_IMAGES_PER_BATCH rows exist.
     """
     existing = (
         db.query(ImageJob)
@@ -129,6 +188,9 @@ def regenerate_restyle(db: Session, batch_id: str) -> ImageJob:
     )
     if not existing:
         raise RestyleBatchNotFound(f"No batch with id {batch_id}")
+
+    if any(job.status == JobStatus.AWAITING_STYLE for job in existing):
+        raise RestyleStyleNotChosen(f"Batch {batch_id} has no style selected yet")
 
     if any(job.status in (JobStatus.PENDING, JobStatus.PROCESSING) for job in existing):
         raise RestyleGenerationInProgress(
@@ -141,14 +203,19 @@ def regenerate_restyle(db: Session, batch_id: str) -> ImageJob:
             f"{settings.MAX_IMAGES_PER_BATCH} images"
         )
 
+    # All curated styles used -> None -> the model freely picks the surface
+    # (same behavior as the original first-generation prompt). Only
+    # MAX_IMAGES_PER_BATCH stops the batch from here on.
+    next_style = _next_unused_style(existing)
+
     template = existing[0]  # source photo + extra_styling are identical across a batch
-    next_index = len(existing)
 
     job = ImageJob(
         batch_id=batch_id,
         batch_number=template.batch_number,  # same folder as the rest of this batch
         status=JobStatus.PENDING,
-        variation_index=next_index,
+        variation_index=len(existing),
+        style_index=next_style,
         extra_styling=template.extra_styling,
         source_image_path=template.source_image_path,
     )

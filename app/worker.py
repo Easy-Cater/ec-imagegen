@@ -86,12 +86,12 @@ def process_image_job(job_id: int) -> None:
                 )
             source_bytes = storage.read(job.source_image_path)
 
-            prompt = build_restyle_prompt(job.extra_styling, variation_index=job.variation_index)
+            prompt = build_restyle_prompt(job.extra_styling, style_index=job.style_index)
             logger.info(
-                "restyle_prompt job_id=%s batch_id=%s variation_index=%s prompt=%r",
+                "restyle_prompt job_id=%s batch_id=%s style_index=%s prompt=%r",
                 job.id,
                 job.batch_id,
-                job.variation_index,
+                job.style_index,
                 prompt,
             )
 

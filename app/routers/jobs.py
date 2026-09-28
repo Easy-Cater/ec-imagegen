@@ -8,8 +8,15 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.database import get_db
 from app.db.models import ImageJob
-from app.schemas import JobOut, RegenerateRestyleRequest, SelectRestyleRequest
+from app.schemas import (
+    GenerateRestyleRequest,
+    JobOut,
+    RegenerateRestyleRequest,
+    SelectRestyleRequest,
+    StyleOut,
+)
 from app.services import job_service
+from app.services.prompt_builder import get_style_options
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
@@ -82,10 +89,10 @@ async def create_restyle_batch(
     db: Session = Depends(get_db),
 ):
     """
-    Merchant uploads one source photo. Generates exactly ONE restyled
-    image. Use POST /jobs/restyle/regenerate afterwards (same batch_id) if
-    the merchant wants to try again, up to settings.MAX_IMAGES_PER_BATCH
-    total attempts.
+    Merchant uploads one source photo. NO generation happens yet: the batch
+    is created in AWAITING_STYLE state. Next, the frontend shows the styles
+    from GET /jobs/restyle/styles and calls POST /jobs/restyle/generate
+    with the chosen style_index. Regenerate is available after that.
     """
     photo_bytes = await photo.read(settings.MAX_UPLOAD_SIZE_BYTES + 1)
     if len(photo_bytes) > settings.MAX_UPLOAD_SIZE_BYTES:
@@ -111,6 +118,29 @@ async def create_restyle_batch(
     )
 
 
+@router.get("/restyle/styles", response_model=list[StyleOut])
+def list_restyle_styles():
+    """Style options the merchant can pick from after uploading a photo."""
+    return get_style_options()
+
+
+@router.post("/restyle/generate", response_model=JobOut, status_code=201)
+def generate_restyle(req: GenerateRestyleRequest, db: Session = Depends(get_db)):
+    """
+    Merchant picked a style for an uploaded photo — starts the first
+    generation for that batch. 404 unknown batch, 422 invalid style_index,
+    409 if a style was already chosen for this batch.
+    """
+    try:
+        return job_service.start_restyle(db, req.batch_id, req.style_index)
+    except job_service.RestyleBatchNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except job_service.InvalidRestyleStyle as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except job_service.RestyleStyleAlreadyChosen as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
 @router.post("/restyle/regenerate", response_model=JobOut, status_code=201)
 def regenerate_restyle(req: RegenerateRestyleRequest, db: Session = Depends(get_db)):
     """
@@ -122,7 +152,7 @@ def regenerate_restyle(req: RegenerateRestyleRequest, db: Session = Depends(get_
         return job_service.regenerate_restyle(db, req.batch_id)
     except job_service.RestyleBatchNotFound as e:
         raise HTTPException(status_code=404, detail=str(e))
-    except job_service.RestyleGenerationInProgress as e:
+    except (job_service.RestyleGenerationInProgress, job_service.RestyleStyleNotChosen) as e:
         raise HTTPException(status_code=409, detail=str(e))
     except job_service.RestyleLimitReached as e:
         raise HTTPException(status_code=409, detail=str(e))

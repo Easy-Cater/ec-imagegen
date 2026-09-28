@@ -17,6 +17,7 @@ def _now() -> datetime:
 
 
 class JobStatus(str, enum.Enum):
+    AWAITING_STYLE = "awaiting_style"  # source photo uploaded, merchant has not picked a style yet
     PENDING = "pending"
     PROCESSING = "processing"
     COMPLETED = "completed"
@@ -75,6 +76,10 @@ class ImageJob(Base):
     status: Mapped[JobStatus] = mapped_column(Enum(JobStatus), default=JobStatus.PENDING, index=True)
 
     variation_index: Mapped[int] = mapped_column(Integer, default=0)
+    # Index into prompt_builder.RESTYLE_VARIATION_STYLES chosen for this
+    # attempt (merchant's pick for the first one, auto-picked for regenerates).
+    # NULL only while AWAITING_STYLE, or on rows created before this column existed.
+    style_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     extra_styling: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     model_used: Mapped[str | None] = mapped_column(String(128), nullable=True)
