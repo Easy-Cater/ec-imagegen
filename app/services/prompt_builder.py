@@ -11,18 +11,26 @@ execute, not as a scene description to render from scratch.
 style_index behavior:
   - The merchant picks one entry of RESTYLE_VARIATION_STYLES after uploading
     the photo; that entry is used for step 3 of the prompt.
+  - Index 0 is the "Clean Studio" style: a seamless light-grey (#F7F7F7)
+    backdrop, like the photos on food-delivery app menus. It uses a slightly
+    different prompt wrapper (see _CLEAN_STYLE_INDEX / _build_prompt) because
+    every other style FORBIDS a plain/pale background.
   - Each "Regenerate" is assigned a different, not-yet-used style by
     job_service.regenerate_restyle, and it arrives here the same way.
   - style_index=None (regenerates after every curated style has been used,
     and legacy rows) lets the model freely choose the surface via
     _FIRST_SURFACE_INSTRUCTION.
 
-Both cases share the exact same surrounding instructions (steps 1, 2, 4,
-5, 6 + the white-background constraint) via _build_prompt() — only step 3
+Both cases share the same surrounding instructions via _build_prompt() —
+only the surface step (and, for the clean style, the background rules)
 differs, so there's one template to maintain, not two duplicated blocks.
 """
 
-# Step 3 used only for variation_index == 0 — the model freely picks the
+# Index of the light-grey / clean studio style inside RESTYLE_VARIATION_STYLES.
+# It is the FIRST option shown to the merchant.
+_CLEAN_STYLE_INDEX = 0
+
+# Step 3 used when style_index is None — the model freely picks the
 # surface. Unchanged from the original prompt that was already working.
 _FIRST_SURFACE_INSTRUCTION = (
     "Freely choose ONE realistic, richly textured commercial food-"
@@ -34,12 +42,23 @@ _FIRST_SURFACE_INSTRUCTION = (
     "plate - never wash it out to white or near-white."
 )
 
-# Step 3 used for variation_index >= 1 — one specific, deliberately
-# chosen surface per regenerate attempt. Ordered best-first for
-# commercial food photography. (variation_index - 1) selects into this
-# list via modulo, so regenerate attempts cycle through visibly
-# different looks: 1st regenerate = style[0], 2nd = style[1], etc.
+# One specific, deliberately chosen surface per style. The list index is the
+# style_index stored on ImageJob. Index 0 = Clean Studio (light grey).
 RESTYLE_VARIATION_STYLES: list[str] = [
+    # 0. Clean light-grey studio — matches the look of food-delivery app
+    # menu photos (measured background ~ RGB 247,247,247 / #F7F7F7 with a
+    # soft ~#E4E4E4 contact shadow). Uses the "clean" prompt wrapper.
+    "Use a seamless, perfectly clean, evenly lit light-grey studio "
+    "backdrop, a solid uniform color of approximately #F7F7F7 (RGB 247, "
+    "247, 247), like a professional food-delivery-app menu photo. No "
+    "texture, no pattern, no gradient banding, no visible horizon line, "
+    "table edge, or props. Light it with a large, soft, diffused "
+    "overhead-front light, neutral daylight color temperature (~5500K), "
+    "producing a soft, subtle light-grey contact shadow (about #E4E4E4) "
+    "directly beneath and slightly to the lower-right of the food. "
+    "Camera angle: three-quarter view, slightly elevated - the standard "
+    "e-commerce menu-photo angle.",
+
     # 1. Warm wood — most reliably appetite-appealing surface in real
     # commercial food photography. Warm color temperature makes food
     # look fresher and more inviting.
@@ -93,23 +112,6 @@ RESTYLE_VARIATION_STYLES: list[str] = [
     "(~2800K), casting long soft shadows. Camera angle: close "
     "three-quarter, at table height.",
 
-    # # 7. Maximum-quality neutral studio setup — clean, premium, highest
-    # # fidelity look. Camera angle left as an editable placeholder so it
-    # # can be swapped manually per generation.
-    # "Use a premium, richly textured neutral surface (your choice of "
-    # "warm light oak wood, honed dark stone, or a matte mid-grey solid "
-    # "backdrop - never white/cream/pale-grey) rendered in the highest "
-    # "possible fidelity: crisp micro-texture and grain fully resolved, "
-    # "no softness, no blur, no compression artifacts anywhere except the "
-    # "intentional background bokeh. Light it with one large soft "
-    # "key light plus a subtle fill light to control contrast, neutral-"
-    # "warm color temperature (~4200K), producing clean, well-defined "
-    # "highlights and a soft, natural contact shadow with realistic "
-    # "falloff. Camera angle: [MANUALLY SET CAMERA ANGLE HERE - e.g. "
-    # "'straight-down flat lay', 'three-quarter at table height', "
-    # "'close-up macro three-quarter'] - use professional food-menu "
-    # "framing at that angle, sharply focused on the food with maximum "
-    # "clarity and detail retention.",
     # 7. Maximum-quality neutral studio setup — clean, premium, highest
     # fidelity look.
     "Use a premium, richly textured neutral surface (your choice of "
@@ -130,6 +132,7 @@ RESTYLE_VARIATION_STYLES: list[str] = [
 
 # Short merchant-facing names, SAME ORDER as RESTYLE_VARIATION_STYLES.
 RESTYLE_STYLE_LABELS: list[str] = [
+    "Clean Studio",
     "Warm Wood",
     "Dark Slate",
     "Marble",
@@ -149,19 +152,92 @@ def get_style_options() -> list[dict]:
     return [{"index": i, "label": label} for i, label in enumerate(RESTYLE_STYLE_LABELS)]
 
 
-def _build_prompt(surface_instruction: str) -> str:
+def _build_prompt(surface_instruction: str, *, clean_background: bool = False) -> str:
     """
     Shared template used for BOTH the first generation and every
-    regenerate attempt. Only step 3 (surface/lighting/angle) is injected
-    per-call — steps 1, 2, 4, 5, 6 and the white-background constraint
-    are identical every time, defined here once.
+    regenerate attempt. Only the surface step is injected per-call.
+
+    clean_background=False (all textured styles): identical to the
+    original prompt — background must NEVER be plain white/pale.
+    clean_background=True (Clean Studio style): the opening constraint,
+    the shadow/vignette wording in step 4 and the FINAL REMINDER are
+    flipped, because the original ones forbid exactly what this style wants.
     """
+    if clean_background:
+        opening = (
+            "Edit this food photo. CRITICAL CONSTRAINT: the background must "
+            "be a seamless, perfectly clean, uniform light-grey (#F7F7F7) "
+            "professional studio backdrop - no texture, no pattern, no "
+            "props, no clutter, no visible edges. Follow these instructions "
+            "exactly and in order:\n"
+        )
+        step3_tail = (
+            " The plate/bowl must rest naturally on this backdrop with a "
+            "soft grounded shadow. Remove ALL background elements "
+            "unrelated to the dish - including plants, leaves, foliage, "
+            "furniture, walls, floor tiles, decor, and any other object in "
+            "the original photo - along with all clutter, other dishes, "
+            "packaging, cables, stains, and messy table surface from the "
+            "original shot.\n"
+        )
+        step4 = (
+            "4. Add clean, soft, even professional studio lighting with "
+            "realistic soft shadows and highlights that follow the food's "
+            "actual shape - do not add glow, haze, plastic sheen, or "
+            "painterly softness to the food itself. Include a soft, "
+            "subtle light-grey contact shadow directly beneath the "
+            "plate/bowl/container so it looks grounded. Keep the backdrop "
+            "evenly lit with NO dark vignette and NO dark edges.\n"
+        )
+        step5 = (
+            "5. Keep the food tack-sharp with crisp detail, on a smooth, "
+            "uniform backdrop.\n"
+        )
+        final = (
+            "FINAL REMINDER: the background must be a uniform, clean, "
+            "light-grey (about #F7F7F7) studio backdrop - a colored, "
+            "textured, dark, or cluttered background is a failed result "
+            "and not acceptable."
+        )
+    else:
+        opening = (
+            "Edit this food photo. CRITICAL CONSTRAINT: the background must "
+            "NEVER be plain white, off-white, or a pale featureless void. It "
+            "must always be a clearly visible, textured, colored real-world "
+            "surface. Follow these instructions exactly and in order:\n"
+        )
+        step3_tail = (
+            " The plate/bowl must clearly rest ON "
+            "this surface with the surface's color and texture visible "
+            "around it. Remove ALL background elements unrelated to the "
+            "dish - including plants, leaves, foliage, furniture, walls, "
+            "floor tiles, decor, and any other object in the original photo "
+            "- along with all clutter, other dishes, packaging, cables, "
+            "stains, and messy table surface from the original shot.\n"
+        )
+        step4 = (
+            "4. Add professional studio lighting with realistic soft shadows "
+            "and highlights that follow the food's actual shape - do not add "
+            "glow, haze, plastic sheen, or painterly softness to the food "
+            "itself. Include a soft, visible contact shadow directly beneath "
+            "the plate/bowl/container so it looks grounded on the surface, "
+            "with a subtle natural falloff/vignette toward the edges of the "
+            "frame rather than flat, shadowless, uniform lighting throughout.\n"
+        )
+        step5 = (
+            "5. Add a shallow depth of field so the food is tack-sharp and "
+            "the background gently blurs.\n"
+        )
+        final = (
+            "FINAL REMINDER: the "
+            "background must be a clearly colored, clearly textured real "
+            "surface - a white, cream, or pale-grey empty background is a "
+            "failed result and not acceptable."
+        )
+
     return (
-        "Edit this food photo. CRITICAL CONSTRAINT: the background must "
-        "NEVER be plain white, off-white, or a pale featureless void. It "
-        "must always be a clearly visible, textured, colored real-world "
-        "surface. Follow these instructions exactly and in order:\n"
-        "1. Do not change the food itself in any way: keep the exact same "
+        opening
+        + "1. Do not change the food itself in any way: keep the exact same "
         "dish, same ingredients, same portion size, same plate/bowl/"
         "container, same arrangement, same shape, same texture, same "
         "proportions. Do not redraw, resculpt, smooth, sharpen, or "
@@ -170,23 +246,11 @@ def _build_prompt(surface_instruction: str) -> str:
         "and re-framing it as instructed below.\n"
         "2. Remove any hand, fingers, arm, or body part holding or "
         "touching the food or its container.\n"
-        f"3. {surface_instruction} The plate/bowl must clearly rest ON "
-        "this surface with the surface's color and texture visible "
-        "around it. Remove ALL background elements unrelated to the "
-        "dish - including plants, leaves, foliage, furniture, walls, "
-        "floor tiles, decor, and any other object in the original photo "
-        "- along with all clutter, other dishes, packaging, cables, "
-        "stains, and messy table surface from the original shot.\n"
-        "4. Add professional studio lighting with realistic soft shadows "
-        "and highlights that follow the food's actual shape - do not add "
-        "glow, haze, plastic sheen, or painterly softness to the food "
-        "itself. Include a soft, visible contact shadow directly beneath "
-        "the plate/bowl/container so it looks grounded on the surface, "
-        "with a subtle natural falloff/vignette toward the edges of the "
-        "frame rather than flat, shadowless, uniform lighting throughout.\n"
-        "5. Add a shallow depth of field so the food is tack-sharp and "
-        "the background gently blurs.\n"
-        "6. Correct the camera angle and framing to a standard "
+        f"3. {surface_instruction}"
+        + step3_tail
+        + step4
+        + step5
+        + "6. Correct the camera angle and framing to a standard "
         "professional commercial food-photography composition, as "
         "specified above - centered in frame, as if shot on a tripod. Do "
         "NOT preserve an awkward, tilted, handheld, or top-down "
@@ -198,10 +262,8 @@ def _build_prompt(surface_instruction: str) -> str:
         "painting, illustration, HDR, or oversharpened look - the result "
         "must look like an unedited, in-camera DSLR photograph with "
         "natural noise and texture, not an AI-generated or artificial "
-        "rendering. No text, no watermark, no logos. FINAL REMINDER: the "
-        "background must be a clearly colored, clearly textured real "
-        "surface - a white, cream, or pale-grey empty background is a "
-        "failed result and not acceptable."
+        "rendering. No text, no watermark, no logos. "
+        + final
     )
 
 
@@ -210,14 +272,16 @@ def build_restyle_prompt(extra_styling: str | None, style_index: int | None = No
     style_index -> the merchant-selected (or auto-assigned regenerate) entry
     of RESTYLE_VARIATION_STYLES. None -> model freely picks the surface.
     """
+    clean = False
     if style_index is None:
         surface_instruction = _FIRST_SURFACE_INSTRUCTION
     else:
         if not 0 <= style_index < len(RESTYLE_VARIATION_STYLES):
             raise ValueError(f"style_index {style_index} out of range")
         surface_instruction = RESTYLE_VARIATION_STYLES[style_index]
+        clean = style_index == _CLEAN_STYLE_INDEX
 
-    base = _build_prompt(surface_instruction)
+    base = _build_prompt(surface_instruction, clean_background=clean)
 
     parts = [base]
     if extra_styling:
